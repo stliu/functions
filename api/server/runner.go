@@ -82,12 +82,14 @@ func handleRunner(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, simpleError(models.ErrAppsNotFound))
 		return
 	}
-	route := c.Param("route")
-	if route == "" {
-		route = c.Request.URL.Path
-	}
 
-	log.WithFields(logrus.Fields{"app": appName, "path": route}).Debug("Finding route on datastore")
+	routePath := c.Param("route")
+	if routePath == "" {
+		routePath = c.Request.URL.Path
+	}
+	routeBasePath := "/" + strings.Split(routePath, "/")[1] // Format the route path splitting URL
+
+	log.WithFields(logrus.Fields{"app": appName, "path": routePath, "basePath": routeBasePath}).Info("Finding route on datastore")
 
 	app, err := Api.Datastore.GetApp(appName)
 	if err != nil || app == nil {
@@ -96,99 +98,97 @@ func handleRunner(c *gin.Context) {
 		return
 	}
 
-	routes, err := Api.Datastore.GetRoutesByApp(appName, &models.RouteFilter{})
-	if err != nil {
+	route, err := Api.Datastore.GetRoute(appName, routeBasePath)
+	if err != nil || route == nil {
 		log.WithError(err).Error(models.ErrRoutesList)
 		c.JSON(http.StatusInternalServerError, simpleError(models.ErrRoutesList))
 		return
 	}
 
-	log.WithField("routes", routes).Debug("Got routes from datastore")
-	for _, el := range routes {
-		log = log.WithFields(logrus.Fields{
-			"app": appName, "route": el.Path, "image": el.Image, "request_id": reqID})
+	log.WithField("routes", route).Debug("Got routes from datastore")
+	log = log.WithFields(logrus.Fields{
+		"app": appName, "route": route.Path, "image": route.Image, "request_id": reqID})
 
-		// Request count metric
-		metricBaseName := "server.handleRunner." + appName + "."
-		runner.LogMetricCount(ctx, (metricBaseName + "requests"), 1)
+	// Request count metric
+	metricBaseName := "server.handleRunner." + appName + "."
+	runner.LogMetricCount(ctx, (metricBaseName + "requests"), 1)
 
-		if params, match := matchRoute(el.Path, route); match {
+	var stdout bytes.Buffer // TODO: should limit the size of this, error if gets too big. akin to: https://golang.org/pkg/io/#LimitReader
+	stderr := runner.NewFuncLogger(appName, route.Path, route.Image, reqID)
 
-			var stdout bytes.Buffer // TODO: should limit the size of this, error if gets too big. akin to: https://golang.org/pkg/io/#LimitReader
-			stderr := runner.NewFuncLogger(appName, route, el.Image, reqID)
+	envVars := map[string]string{
+		"METHOD":      c.Request.Method,
+		"ROUTE":       route.Path,
+		"PAYLOAD":     string(payload),
+		"REQUEST_URL": c.Request.URL.String(),
+	}
 
-			envVars := map[string]string{
-				"METHOD":      c.Request.Method,
-				"ROUTE":       el.Path,
-				"PAYLOAD":     string(payload),
-				"REQUEST_URL": c.Request.URL.String(),
-			}
+	// app config
+	for k, v := range app.Config {
+		envVars["CONFIG_"+strings.ToUpper(k)] = v
+	}
 
-			// app config
-			for k, v := range app.Config {
-				envVars["CONFIG_"+strings.ToUpper(k)] = v
-			}
+	// route config
+	for k, v := range route.Config {
+		envVars["CONFIG_"+strings.ToUpper(k)] = v
+	}
 
-			// route config
-			for k, v := range el.Config {
-				envVars["CONFIG_"+strings.ToUpper(k)] = v
-			}
-
-			// params
-			for _, param := range params {
-				envVars["PARAM_"+strings.ToUpper(param.Key)] = param.Value
-			}
-
-			// headers
-			for header, value := range c.Request.Header {
-				envVars["HEADER_"+strings.ToUpper(header)] = strings.Join(value, " ")
-			}
-
-			cfg := &runner.Config{
-				Image:   el.Image,
-				Timeout: 30 * time.Second,
-				ID:      reqID,
-				AppName: appName,
-				Stdout:  &stdout,
-				Stderr:  stderr,
-				Env:     envVars,
-			}
-
-			metricStart := time.Now()
-			if result, err := Api.Runner.Run(c, cfg); err != nil {
-				log.WithError(err).Error(models.ErrRunnerRunRoute)
-				c.JSON(http.StatusInternalServerError, simpleError(models.ErrRunnerRunRoute))
-			} else {
-				for k, v := range el.Headers {
-					c.Header(k, v[0])
-				}
-
-				if result.Status() == "success" {
-					c.Data(http.StatusOK, "", stdout.Bytes())
-					runner.LogMetricCount(ctx, (metricBaseName + "succeeded"), 1)
-
-				} else {
-					// log.WithFields(logrus.Fields{"app": appName, "route": el, "req_id": reqID}).Debug(stderr.String())
-					// Error count metric
-					runner.LogMetricCount(ctx, (metricBaseName + "error"), 1)
-
-					c.AbortWithStatus(http.StatusInternalServerError)
-				}
-			}
-			// Execution time metric
-			metricElapsed := time.Since(metricStart)
-			runner.LogMetricTime(ctx, (metricBaseName + "time"), metricElapsed)
-			return
+	// params
+	log.Info("Looking params")
+	if params, match := getRouteParams(route.Path, routePath); match {
+		log.Info("Math params")
+		for _, param := range params {
+			log.WithField("params", param.Key).Info("Key")
+			log.WithField("params", param.Value).Info("Value")
+			envVars["PARAM_"+strings.ToUpper(param.Key)] = param.Value
 		}
 	}
 
-	log.WithError(err).Error(models.ErrRunnerRouteNotFound)
-	c.JSON(http.StatusNotFound, simpleError(models.ErrRunnerRouteNotFound))
+	// headers
+	for header, value := range c.Request.Header {
+		envVars["HEADER_"+strings.ToUpper(header)] = strings.Join(value, " ")
+	}
+
+	cfg := &runner.Config{
+		Image:   route.Image,
+		Timeout: 30 * time.Second,
+		ID:      reqID,
+		AppName: appName,
+		Stdout:  &stdout,
+		Stderr:  stderr,
+		Env:     envVars,
+	}
+
+	metricStart := time.Now()
+	if result, err := Api.Runner.Run(c, cfg); err != nil {
+		log.WithError(err).Error(models.ErrRunnerRunRoute)
+		c.JSON(http.StatusInternalServerError, simpleError(models.ErrRunnerRunRoute))
+	} else {
+		for k, v := range route.Headers {
+			c.Header(k, v[0])
+		}
+
+		if result.Status() == "success" {
+			c.Data(http.StatusOK, "", stdout.Bytes())
+			runner.LogMetricCount(ctx, (metricBaseName + "succeeded"), 1)
+
+		} else {
+			// log.WithFields(logrus.Fields{"app": appName, "route": el, "req_id": reqID}).Debug(stderr.String())
+			// Error count metric
+			runner.LogMetricCount(ctx, (metricBaseName + "error"), 1)
+
+			c.AbortWithStatus(http.StatusInternalServerError)
+		}
+	}
+	// Execution time metric
+	metricElapsed := time.Since(metricStart)
+	runner.LogMetricTime(ctx, (metricBaseName + "time"), metricElapsed)
+	return
 }
 
 var fakeHandler = func(http.ResponseWriter, *http.Request, Params) {}
 
-func matchRoute(baseRoute, route string) (Params, bool) {
+func getRouteParams(baseRoute, route string) (Params, bool) {
 	tree := &node{}
 	tree.addRoute(baseRoute, fakeHandler)
 	handler, p, _ := tree.getValue(route)
