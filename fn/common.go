@@ -275,7 +275,6 @@ func writeTmpDockerfile(dir string, ff *funcfile) error {
 		buffer.WriteString(s)
 		buffer.WriteString("\"")
 	}
-	fmt.Println(buffer.String())
 
 	t := template.Must(template.New("Dockerfile").Parse(tplDockerfile))
 	err = t.Execute(fd, struct {
