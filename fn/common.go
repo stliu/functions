@@ -235,6 +235,7 @@ var acceptableFnRuntimes = map[string]string{
 	"python":    "iron/python",
 	"ruby":      "iron/ruby",
 	"scala":     "iron/scala",
+	"dotnet":    "microsoft/dotnet:runtime",
 }
 
 const tplDockerfile = `FROM {{ .BaseImage }}
