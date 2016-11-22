@@ -168,15 +168,16 @@ func (s *Server) serve(c *gin.Context, log logrus.FieldLogger, appName string, f
 	}
 
 	cfg := &runner.Config{
-		Image:   found.Image,
-		Timeout: 30 * time.Second,
-		ID:      reqID,
 		AppName: appName,
-		Stdout:  &stdout,
-		Stderr:  stderr,
+		Format:  found.Format,
 		Env:     envVars,
+		ID:      reqID,
+		Image:   found.Image,
 		Memory:  found.Memory,
+		Stderr:  stderr,
 		Stdin:   payload,
+		Stdout:  &stdout,
+		Timeout: 30 * time.Second,
 	}
 
 	switch found.Type {

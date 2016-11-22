@@ -31,6 +31,7 @@ type Route struct {
 	Memory  uint64      `json:"memory,omitempty"`
 	Headers http.Header `json:"headers,omitempty"`
 	Type    string      `json:"type,omitempty"`
+	Format  string      `json:"format,omitempty"`
 	Config  `json:"config"`
 }
 
@@ -38,6 +39,7 @@ var (
 	ErrRoutesValidationFoundDynamicURL = errors.New("Dynamic URL is not allowed")
 	ErrRoutesValidationInvalidPath     = errors.New("Invalid Path format")
 	ErrRoutesValidationInvalidType     = errors.New("Invalid route Type")
+	ErrRoutesValidationInvalidFormat   = errors.New("Invalid route Format")
 	ErrRoutesValidationMissingAppName  = errors.New("Missing route AppName")
 	ErrRoutesValidationMissingImage    = errors.New("Missing route Image")
 	ErrRoutesValidationMissingName     = errors.New("Missing route Name")
@@ -80,6 +82,10 @@ func (r *Route) Validate() error {
 
 	if r.Type != TypeAsync && r.Type != TypeSync {
 		res = append(res, ErrRoutesValidationInvalidType)
+	}
+
+	if r.Format != FormatDefault && r.Format != FormatHTTP && r.Format != FormatJSON {
+		res = append(res, ErrRoutesValidationInvalidFormat)
 	}
 
 	if len(res) > 0 {
