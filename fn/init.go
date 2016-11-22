@@ -27,6 +27,7 @@ var (
 		".js": "node",
 		".rb": "ruby",
 		".cs": "dotnet",
+		".py": "python",
 	}
 
 	fnInitRuntimes []string
