@@ -31,10 +31,10 @@ type TaskResponse struct {
 //
 // A function is converted into a hot container if its `Format` is either
 // models.FormatHTTP or models.FormatJSON. At the very first task request a hot
-// container shall be started and run it. It has two internal clocks: one ping,
-// whose responsibility is to start new hot containers as they get clogged with
-// work; and the other that actually stops the container if it sits doing
-// nothing long enough.
+// container shall be started and run it. It has two internal clocks: one whose
+// responsibility is to start new hot containers as they get clogged with work;
+// and the other that actually stops the container if it sits doing nothing long
+// enough. In the absence of workload, it just stops the whole clockwork.
 //
 // Internally, the hot container uses a modified Config whose Stdin and Stdout
 // are bound to an internal pipe. This internal pipe is fed with incoming tasks
@@ -168,25 +168,47 @@ func (h *hotcontainermgr) getPipe(ctx context.Context, rnr *Runner, cfg *Config)
 
 // hotcontainersvr is part of hotcontainermgr, abstracted apart for
 // simplicity, its only purpose is to test for hot containers saturation and
-// try starting as many as needed.
+// try starting as many as needed. In case of absence of workload, it will stop
+// trying to start new hot containers.
 type hotcontainersvr struct {
-	cfg   *Config
-	rnr   *Runner
-	tasks <-chan TaskRequest
-	ping  chan struct{}
-	maxc  chan struct{}
+	cfg      *Config
+	rnr      *Runner
+	tasksin  <-chan TaskRequest
+	tasksout chan TaskRequest
+	maxc     chan struct{}
 }
 
 func newHotcontainersvr(ctx context.Context, cfg *Config, rnr *Runner, tasks <-chan TaskRequest) *hotcontainersvr {
 	svr := &hotcontainersvr{
-		cfg:   cfg,
-		rnr:   rnr,
-		tasks: tasks,
-		ping:  make(chan struct{}),
-		maxc:  make(chan struct{}, cfg.MaxConcurrency),
+		cfg:      cfg,
+		rnr:      rnr,
+		tasksin:  tasks,
+		tasksout: make(chan TaskRequest, 1),
+		maxc:     make(chan struct{}, cfg.MaxConcurrency),
 	}
+
+	// This pipe will take all incoming tasks and just forward them to the
+	// started hot containers. The catch here is that it feeds off an
+	// buffered channel from an unbuffered one. And this buffered channel is
+	// then used to determine the presence of pending tasks.
+	go svr.pipe(ctx)
+
+	// If no hot container is available, tasksout will fill up to its
+	// capacity, scale() will use this information to know whether it must
+	// start or not new hot containers.
 	go svr.scale(ctx)
 	return svr
+}
+
+func (svr *hotcontainersvr) pipe(ctx context.Context) {
+	for t := range svr.tasksin {
+		svr.tasksout <- t
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+	}
 }
 
 func (svr *hotcontainersvr) scale(ctx context.Context) {
@@ -197,15 +219,13 @@ func (svr *hotcontainersvr) scale(ctx context.Context) {
 			return
 
 		case <-timeout:
-			if err := svr.launch(ctx); err != nil {
-				logrus.WithError(err).Error("cannot start more hot containers")
+			if len(svr.tasksout) > 0 {
+				if err := svr.launch(ctx); err != nil {
+					logrus.WithError(err).Error("cannot start more hot containers")
+				}
 			}
-
-		case svr.ping <- struct{}{}:
-			time.Sleep(1 * time.Second)
 		}
 	}
-
 }
 
 func (svr *hotcontainersvr) launch(ctx context.Context) error {
@@ -214,9 +234,8 @@ func (svr *hotcontainersvr) launch(ctx context.Context) error {
 		hc, err := newHotcontainer(
 			svr.cfg,
 			protocol.Protocol(svr.cfg.Format),
-			svr.tasks,
+			svr.tasksout,
 			svr.rnr,
-			svr.ping,
 		)
 		if err != nil {
 			return err
@@ -238,7 +257,6 @@ type hotcontainer struct {
 	cfg   *Config
 	proto protocol.ContainerIO
 	tasks <-chan TaskRequest
-	ping  <-chan struct{}
 
 	// Side of the pipe that takes information from outer world
 	// and injects into the container.
@@ -252,7 +270,7 @@ type hotcontainer struct {
 	rnr *Runner
 }
 
-func newHotcontainer(cfg *Config, proto protocol.Protocol, tasks <-chan TaskRequest, rnr *Runner, ping <-chan struct{}) (*hotcontainer, error) {
+func newHotcontainer(cfg *Config, proto protocol.Protocol, tasks <-chan TaskRequest, rnr *Runner) (*hotcontainer, error) {
 	stdinr, stdinw := io.Pipe()
 	stdoutr, stdoutw := io.Pipe()
 
@@ -265,7 +283,6 @@ func newHotcontainer(cfg *Config, proto protocol.Protocol, tasks <-chan TaskRequ
 		cfg:   cfg,
 		proto: p,
 		tasks: tasks,
-		ping:  ping,
 
 		in:  stdinw,
 		out: stdoutr,
@@ -295,8 +312,6 @@ func (hc *hotcontainer) serve(ctx context.Context) {
 			case <-inactivity:
 				cancel()
 
-			case <-hc.ping:
-
 			case task := <-hc.tasks:
 				if err := hc.proto.Dispatch(lctx, task.Config.Stdin, task.Config.Stdout); err != nil {
 					logrus.WithField("ctx", lctx).Info("task failed")
@@ -322,9 +337,9 @@ func (hc *hotcontainer) serve(ctx context.Context) {
 	cfg.Stderr = os.Stderr
 	result, err := hc.rnr.Run(lctx, &cfg)
 	if err != nil {
-		logrus.WithError(err).Error("hot container failure")
+		logrus.WithError(err).Error("hot container failure detected")
 	}
-	logrus.WithField("result", result).Info("hot container done")
+	logrus.WithField("result", result).Info("hot container terminated")
 	cancel()
 	wg.Wait()
 }
