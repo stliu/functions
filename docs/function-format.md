@@ -32,7 +32,7 @@ Cons:
 
 #### HTTP I/O Format
 
-`--input-format http`
+`--format http`
 
 HTTP format could be a good option as it is in very common use obviously, most languages have some semi-easy way to parse it, and it's streamable. The response will look like a HTTP response. The communication is still done via stdin/stdout, but these pipes are never closed unless the container is explicitly terminated. The basic format is:
 
@@ -66,9 +66,9 @@ Cons:
 * Requires a parsing library or fair amount of code to parse headers properly
 * Double parsing - headers + body (if body is to be parsed, such as json)
 
-#### JSON/HTTP I/O Format
+#### JSON I/O Format
 
-`--input-format json-http`
+`--format json`
 
 The idea here is to keep the HTTP base structure, but make it a bit easier to parse by making the `request line` and `headers` a JSON struct.
 Eg:
