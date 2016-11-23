@@ -64,6 +64,11 @@ func routes() cli.Command {
 						Name:  "config,c",
 						Usage: "route configuration",
 					},
+					cli.StringFlag{
+						Name:  "format,f",
+						Usage: "hot container IO format - json or http",
+						Value: "",
+					},
 				},
 			},
 			{
@@ -229,6 +234,7 @@ func (a *routesCmd) create(c *cli.Context) error {
 	appName := c.Args().Get(0)
 	route := c.Args().Get(1)
 	image := c.Args().Get(2)
+	var format string
 	if image == "" {
 		ff, err := findFuncfile()
 		if err != nil {
@@ -239,6 +245,13 @@ func (a *routesCmd) create(c *cli.Context) error {
 			}
 		}
 		image = ff.FullName()
+		if ff.Format != nil {
+			format = *ff.Format
+		}
+	}
+
+	if f := c.String("format"); f != "" {
+		format = c.String("format")
 	}
 
 	body := functions.RouteWrapper{
@@ -249,6 +262,7 @@ func (a *routesCmd) create(c *cli.Context) error {
 			Memory:  c.Int64("memory"),
 			Type_:   c.String("type"),
 			Config:  extractEnvConfig(c.StringSlice("config")),
+			Format:  format,
 		},
 	}
 

@@ -31,6 +31,7 @@ type funcfile struct {
 	Route      *string           `yaml:"route,omitempty",json:"route,omitempty"`
 	Type       *string           `yaml:"type,omitempty",json:"type,omitempty"`
 	Memory     *int64            `yaml:"memory,omitempty",json:"memory,omitempty"`
+	Format     *string           `yaml:"format,omitempty",json:"format,omitempty"`
 	Config     map[string]string `yaml:"config,omitempty",json:"config,omitempty"`
 	Build      []string          `yaml:"build,omitempty",json:"build,omitempty"`
 }
