@@ -132,13 +132,13 @@ func RunTask(tasks chan TaskRequest, ctx context.Context, cfg *Config) (drivers.
 // image (chn), but each image may have more than one hot container (hc).
 type hotcontainermgr struct {
 	chn map[string]chan TaskRequest
-	hc  map[string]*hotContainerSupervisor
+	hc  map[string]*hotcontainersvr
 }
 
 func (h *hotcontainermgr) getPipe(ctx context.Context, rnr *Runner, cfg *Config) chan TaskRequest {
 	if h.chn == nil {
 		h.chn = make(map[string]chan TaskRequest)
-		h.hc = make(map[string]*hotContainerSupervisor)
+		h.hc = make(map[string]*hotcontainersvr)
 	}
 
 	image := cfg.Image
@@ -146,7 +146,7 @@ func (h *hotcontainermgr) getPipe(ctx context.Context, rnr *Runner, cfg *Config)
 	if !ok {
 		h.chn[image] = make(chan TaskRequest)
 		tasks = h.chn[image]
-		svr := newHotContainerSupervisor(ctx, cfg, rnr, tasks)
+		svr := newHotcontainersvr(ctx, cfg, rnr, tasks)
 		if err := svr.launch(ctx); err != nil {
 			logrus.WithError(err).Error("cannot start hot container supervisor")
 			return nil
@@ -157,19 +157,19 @@ func (h *hotcontainermgr) getPipe(ctx context.Context, rnr *Runner, cfg *Config)
 	return tasks
 }
 
-// hotContainerSupervisor is part of hotcontainermgr, abstracted apart for
+// hotcontainersvr is part of hotcontainermgr, abstracted apart for
 // simplicity, its only purpose is to test for hot containers saturation and
 // try starting as many as needed.
-type hotContainerSupervisor struct {
+type hotcontainersvr struct {
 	cfg   *Config
 	rnr   *Runner
 	tasks <-chan TaskRequest
 	ping  chan struct{}
 }
 
-func newHotContainerSupervisor(ctx context.Context, cfg *Config, rnr *Runner, tasks <-chan TaskRequest) *hotContainerSupervisor {
+func newHotcontainersvr(ctx context.Context, cfg *Config, rnr *Runner, tasks <-chan TaskRequest) *hotcontainersvr {
 	ping := make(chan struct{})
-	svr := &hotContainerSupervisor{
+	svr := &hotcontainersvr{
 		cfg:   cfg,
 		rnr:   rnr,
 		tasks: tasks,
@@ -179,7 +179,7 @@ func newHotContainerSupervisor(ctx context.Context, cfg *Config, rnr *Runner, ta
 	return svr
 }
 
-func (svr *hotContainerSupervisor) scale(ctx context.Context) {
+func (svr *hotcontainersvr) scale(ctx context.Context) {
 	for {
 		timeout := time.After(hotContainerScaleUpTimeout)
 		select {
@@ -198,8 +198,8 @@ func (svr *hotContainerSupervisor) scale(ctx context.Context) {
 
 }
 
-func (svr *hotContainerSupervisor) launch(ctx context.Context) error {
-	hc, err := newHotContainer(
+func (svr *hotcontainersvr) launch(ctx context.Context) error {
+	hc, err := newHotcontainer(
 		svr.cfg,
 		protocol.Protocol(svr.cfg.Format),
 		svr.tasks,
@@ -234,7 +234,7 @@ type hotcontainer struct {
 	rnr *Runner
 }
 
-func newHotContainer(cfg *Config, proto protocol.Protocol, tasks <-chan TaskRequest, rnr *Runner, ping <-chan struct{}) (*hotcontainer, error) {
+func newHotcontainer(cfg *Config, proto protocol.Protocol, tasks <-chan TaskRequest, rnr *Runner, ping <-chan struct{}) (*hotcontainer, error) {
 	stdinr, stdinw := io.Pipe()
 	stdoutr, stdoutw := io.Pipe()
 
