@@ -66,7 +66,7 @@ import (
 // Scales down if the container is idle for hotContainerScaleDownTimeout.
 const (
 	hotContainerScaleUpTimeout   = 300 * time.Millisecond
-	hotContainerScaleDownTimeout = 1 * time.Second
+	hotContainerScaleDownTimeout = 30 * time.Second
 )
 
 // StartWorkers handle incoming tasks and spawns self-regulating container
