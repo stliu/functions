@@ -18,6 +18,10 @@ type HTTPProtocol struct {
 	out io.Reader
 }
 
+func (p *HTTPProtocol) IsStreamable() bool {
+	return true
+}
+
 func (p *HTTPProtocol) Dispatch(stdin io.Reader, stdout io.Writer) error {
 	var body bytes.Buffer
 	io.Copy(&body, stdin)

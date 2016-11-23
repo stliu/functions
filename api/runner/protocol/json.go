@@ -16,6 +16,10 @@ type JSONProtocol struct {
 	out io.Reader
 }
 
+func (p *JSONProtocol) IsStreamable() bool {
+	return true
+}
+
 func (p *JSONProtocol) Dispatch(stdin io.Reader, stdout io.Writer) error {
 	var body bytes.Buffer
 	io.Copy(&body, stdin)

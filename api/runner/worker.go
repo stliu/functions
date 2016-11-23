@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/iron-io/functions/api/models"
 	"github.com/iron-io/functions/api/runner/protocol"
 	"github.com/iron-io/runner/drivers"
 )
@@ -96,7 +95,16 @@ func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan TaskRequest) {
 		case <-ctx.Done():
 			return
 		case task := <-tasks:
-			if task.Config.Format == models.FormatDefault {
+
+			isStream, err := protocol.IsStreamable(task.Config.Format)
+			if err != nil {
+				logrus.WithError(err).Info("could not detect container IO protocol")
+				wg.Add(1)
+				go runTaskReq(rnr, &wg, task)
+				continue
+			}
+
+			if !isStream {
 				wg.Add(1)
 				go runTaskReq(rnr, &wg, task)
 				continue
@@ -104,8 +112,8 @@ func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan TaskRequest) {
 
 			p := hcmgr.getPipe(ctx, rnr, task.Config)
 			if p == nil {
-				wg.Add(1)
 				logrus.Info("could not find a hot container - running regularly")
+				wg.Add(1)
 				go runTaskReq(rnr, &wg, task)
 				continue
 			}
