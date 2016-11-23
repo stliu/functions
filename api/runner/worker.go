@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"sync"
+	"time"
 
 	"cirello.io/supervisor"
 	"github.com/Sirupsen/logrus"
@@ -108,14 +109,17 @@ type hotContainerSupervisor struct {
 	cfg   *Config
 	rnr   *Runner
 	tasks <-chan TaskRequest
+	ping  chan struct{}
 	supervisor.Supervisor
 }
 
 func newHotContainerSupervisor(ctx context.Context, cfg *Config, rnr *Runner, tasks <-chan TaskRequest) *hotContainerSupervisor {
+	ping := make(chan struct{})
 	svr := &hotContainerSupervisor{
 		cfg:   cfg,
 		rnr:   rnr,
 		tasks: tasks,
+		ping:  ping,
 		Supervisor: supervisor.Supervisor{
 			Name:        fmt.Sprintf("hot container manager for %s", cfg.Image),
 			MaxRestarts: supervisor.AlwaysRestart,
@@ -125,7 +129,27 @@ func newHotContainerSupervisor(ctx context.Context, cfg *Config, rnr *Runner, ta
 		},
 	}
 	go svr.Supervisor.Serve(ctx)
+	go svr.scale(ctx)
 	return svr
+}
+
+func (svr *hotContainerSupervisor) scale(ctx context.Context) {
+	for {
+		timeout := time.After(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			return
+
+		case <-timeout:
+			if err := svr.launch(); err != nil {
+				logrus.WithError(err).Error("cannot start more hot containers")
+			}
+
+		case svr.ping <- struct{}{}:
+			time.Sleep(1 * time.Second)
+		}
+	}
+
 }
 
 func (svr *hotContainerSupervisor) launch() error {
@@ -136,6 +160,7 @@ func (svr *hotContainerSupervisor) launch() error {
 		protocol.Protocol(svr.cfg.Format),
 		svr.tasks,
 		svr.rnr,
+		svr.ping,
 	)
 	if err != nil {
 		return err
@@ -149,6 +174,7 @@ type hotcontainer struct {
 	image string
 	proto protocol.ContainerIO
 	tasks <-chan TaskRequest
+	ping  <-chan struct{}
 
 	// Side of the pipe that takes information from outer world
 	// and injects into the container.
@@ -162,7 +188,7 @@ type hotcontainer struct {
 	rnr *Runner
 }
 
-func newHotContainer(name, image string, proto protocol.Protocol, tasks <-chan TaskRequest, rnr *Runner) (*hotcontainer, error) {
+func newHotContainer(name, image string, proto protocol.Protocol, tasks <-chan TaskRequest, rnr *Runner, ping <-chan struct{}) (*hotcontainer, error) {
 	stdinr, stdinw := io.Pipe()
 	stdoutr, stdoutw := io.Pipe()
 
@@ -176,6 +202,7 @@ func newHotContainer(name, image string, proto protocol.Protocol, tasks <-chan T
 		image: image,
 		proto: p,
 		tasks: tasks,
+		ping:  ping,
 
 		in:  stdinw,
 		out: stdoutr,
@@ -194,14 +221,23 @@ func (hc *hotcontainer) String() string {
 }
 
 func (hc *hotcontainer) Serve(ctx context.Context) {
+	lctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		wg.Done()
 		for {
+			inactivity := time.After(1 * time.Second)
+
 			select {
-			case <-ctx.Done():
+			case <-lctx.Done():
 				return
+
+			case <-inactivity:
+				logrus.WithField("ctx", lctx).Info("stoping hot container")
+				cancel()
+
+			case <-hc.ping:
 
 			case task := <-hc.tasks:
 				if err := hc.proto.Dispatch(task.Config.Stdin, task.Config.Stdout); err != nil {
@@ -220,7 +256,7 @@ func (hc *hotcontainer) Serve(ctx context.Context) {
 		}
 	}()
 
-	result, err := hc.rnr.Run(ctx, &Config{
+	result, err := hc.rnr.Run(lctx, &Config{
 		ID:     hc.name,
 		Image:  hc.image,
 		Stdin:  hc.containerIn,
