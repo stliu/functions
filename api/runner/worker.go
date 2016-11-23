@@ -80,8 +80,8 @@ type TaskResponse struct {
 // if no Hot Container does not pick any task in hotContainerScaleUpTimeout.
 // Scales down if the container is idle for hotContainerScaleDownTimeout.
 const (
-	hotContainerScaleUpTimeout   = 5 * time.Second
-	hotContainerScaleDownTimeout = 1 * time.Second
+	hotContainerScaleUpTimeout   = 1 * time.Second
+	hotContainerScaleDownTimeout = 5 * time.Second
 )
 
 // StartWorkers handle incoming tasks and spawns self-regulating container
