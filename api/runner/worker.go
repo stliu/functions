@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"cirello.io/supervisor"
 	"github.com/Sirupsen/logrus"
+	"github.com/ccirello/supervisor"
 	"github.com/iron-io/functions/api/models"
 	"github.com/iron-io/functions/api/runner/protocol"
 	"github.com/iron-io/runner/drivers"
