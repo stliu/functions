@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS routes (
 	image character varying(256) NOT NULL,
 	format character varying(16) NOT NULL,
 	memory integer NOT NULL,
+	type character varying(16) NOT NULL,
 	headers text NOT NULL,
 	config text NOT NULL,
 	PRIMARY KEY (app_name, path)
@@ -36,7 +37,7 @@ const extrasTableCreate = `CREATE TABLE IF NOT EXISTS extras (
 	value character varying(256) NOT NULL
 );`
 
-const routeSelector = `SELECT app_name, path, image, memory, headers, config FROM routes`
+const routeSelector = `SELECT app_name, path, image, format, memory, type, headers, config FROM routes`
 
 type rowScanner interface {
 	Scan(dest ...interface{}) error
@@ -264,15 +265,17 @@ func (ds *PostgresDatastore) InsertRoute(ctx context.Context, route *models.Rout
 			image,
 			format,
 			memory,
+			type,
 			headers,
 			config
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7);`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8);`,
 		route.AppName,
 		route.Path,
 		route.Image,
 		route.Format,
 		route.Memory,
+		route.Type,
 		string(hbyte),
 		string(cbyte),
 	)
@@ -307,14 +310,16 @@ func (ds *PostgresDatastore) UpdateRoute(ctx context.Context, route *models.Rout
 			image = $3,
 			format = $4,
 			memory = $5,
-			headers = $6,
-			config = $7
+			type = $6,
+			headers = $7,
+			config = $8
 		WHERE app_name = $1 AND path = $2;`,
 		route.AppName,
 		route.Path,
 		route.Image,
 		route.Format,
 		route.Memory,
+		route.Type,
 		string(hbyte),
 		string(cbyte),
 	)
@@ -373,10 +378,10 @@ func scanRoute(scanner rowScanner, route *models.Route) error {
 		&route.AppName,
 		&route.Path,
 		&route.Image,
-		&route.Memory,
-		&headerStr,
-		&route.Type,
 		&route.Format,
+		&route.Memory,
+		&route.Type,
+		&headerStr,
 		&configStr,
 	)
 
