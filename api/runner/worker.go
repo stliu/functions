@@ -50,13 +50,12 @@ type TaskResponse struct {
 // workers.
 func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan TaskRequest) {
 	var wg sync.WaitGroup
-
+	defer wg.Wait()
 	var hcmgr hotcontainermgr
 
 	for {
 		select {
 		case <-ctx.Done():
-			wg.Wait()
 			return
 		case task := <-tasks:
 			if task.Config.Format == models.FormatDefault {
@@ -72,7 +71,11 @@ func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan TaskRequest) {
 				go runTaskReq(rnr, &wg, task)
 				continue
 			}
-			p <- task
+			select {
+			case <-ctx.Done():
+				return
+			case p <- task:
+			}
 		}
 	}
 
