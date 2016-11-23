@@ -9,6 +9,9 @@ import (
 
 var errInvalidProtocol = errors.New("Invalid Protocol")
 
+// ContainerIO defines the interface used to talk to a hot container.
+// Internally, a protocol must know when to alternate between stdin and stdout.
+// It returns any protocol error, if present.
 type ContainerIO interface {
 	Dispatch(stdin io.Reader, stdout io.Writer) error
 }

@@ -11,43 +11,84 @@ import (
 	"time"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/ccirello/supervisor"
 	"github.com/iron-io/functions/api/models"
 	"github.com/iron-io/functions/api/runner/protocol"
 	"github.com/iron-io/runner/drivers"
 )
 
+// TaskRequest stores the task to be executed by the common concurrency stream,
+// whatever type the ask actually is, either sync or async. It holds in itself
+// the channel to return its response to its caller.
 type TaskRequest struct {
 	Ctx      context.Context
 	Config   *Config
 	Response chan TaskResponse
 }
 
+// TaskResponse holds the response metainformation of a TaskRequest
 type TaskResponse struct {
 	Result drivers.RunResult
 	Err    error
 }
 
 // Hot containers - theory of operation
-// A function is converted into a hot container once it achieves a certain
-// threshold of wait. The longer a task is waiting by the queue, more likely it
-// will trigger a timeout on which a hot container will be started. At same
-// time, if a certain image does not generate any workload in a certain timeout
-// period, the hot container will be stopped. Internally, the hot container uses
-// a modified Config, whose Stdin and Stdout, are bound to an internal pipe.
-// This internal pipe is fed with incoming tasks Stdin and feeds incoming
-// tasks with Stdout. The problem here is to know when to stop reading. When
-// does the executor must stop writing into hot container's Stdin, and start
-// reading its Stdout? Also once started reading Stdout, when does it stop?
-// docs/functions-format.md proposes several protocols, among them HTTP/1 and
-// JSON. Both of them help with these problems: HTTP/1 can make use of
-// Content-Length header, and JSON can start reading a JSON and stops when the
-// root object is finished reading. In any case, either enveloping or size
-// tracking are mandatory for binary-safe operations - and message bound
-// detection.
+//
+// A function is converted into a hot container if its `Format` is either
+// models.FormatHTTP or models.FormatJSON. At the very first task request a hot
+// container shall be started and run it. It has two internal clocks: one ping,
+// whose responsibility is to start new hot containers as they get clogged with
+// work; and the other that actually stops the container if it sits doing
+// nothing long enough.
+//
+// Internally, the hot container uses a modified Config whose Stdin and Stdout
+// are bound to an internal pipe. This internal pipe is fed with incoming tasks
+// Stdin and feeds incoming tasks with Stdout.
+//
+// Each execution is the alternation of feeding hot containers stdin with tasks
+// stdin, and reading the answer back from containers stdout. For both `Format`s
+// we send embedded into the message metadata to help the container to know when
+// to stop reading from its stdin and Functions expect the container to do the
+// same. Refer to api/runner/protocol.go for details of these communications.
+//
+// Hot Containers implementation relies in two moving parts (drawn below):
+// hotcontainermgr and hotcontainer. Refer to their respective comments for
+// details.
+//                             │
+//                         Incoming
+//                           Task
+//                             │
+//                             ▼
+//                     ┌───────────────┐
+// ┌───────────┐       │ Task Request  │
+// │  Runner   │◀──────│   Main Loop   │
+// └───────────┘       └───────────────┘
+//                             │
+//                      ┌──────▼────────┐
+//                     ┌┴──────────────┐│
+//                     │   Per Image   ││
+//             ┌───────│ Hot Container │├───────┐
+//             │       │    Manager    ├┘       │
+//             │       └───────────────┘        │
+//             │               │                │
+//             ▼               ▼                ▼
+//       ┌───────────┐   ┌───────────┐    ┌───────────┐
+//       │    Hot    │   │    Hot    │    │    Hot    │
+//       │ Container │   │ Container │    │ Container │
+//       └───────────┘   └───────────┘    └───────────┘
+//          Timeout                          Timeout
+//           Start                          Terminate
+//          (ping)                      (internal clock)
+
+// These are the two clocks important for hot containers life cycle. Scales up
+// if no Hot Container does not pick any task in hotContainerScaleUpTimeout.
+// Scales down if the container is idle for hotContainerScaleDownTimeout.
+const (
+	hotContainerScaleUpTimeout   = 5 * time.Second
+	hotContainerScaleDownTimeout = 1 * time.Second
+)
 
 // StartWorkers handle incoming tasks and spawns self-regulating container
-// workers.
+// worker.
 func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan TaskRequest) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -64,7 +105,7 @@ func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan TaskRequest) {
 				continue
 			}
 
-			p := hcmgr.GetPipe(ctx, rnr, task.Config)
+			p := hcmgr.getPipe(ctx, rnr, task.Config)
 			if p == nil {
 				wg.Add(1)
 				logrus.Info("could not find a hot container - running regularly")
@@ -78,15 +119,26 @@ func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan TaskRequest) {
 			}
 		}
 	}
-
 }
 
+// RunTask helps sending a TaskRequest into the common concurrency stream.
+func RunTask(tasks chan TaskRequest, ctx context.Context, cfg *Config) (drivers.RunResult, error) {
+	tresp := make(chan TaskResponse)
+	treq := TaskRequest{Ctx: ctx, Config: cfg, Response: tresp}
+	tasks <- treq
+	resp := <-treq.Response
+	return resp.Result, resp.Err
+}
+
+// hotcontainermgr is the intermediate between the common concurrency stream and
+// hot containers. All hot containers share a single TaskRequest stream per
+// image (chn), but each image may have more than one hot container (hc).
 type hotcontainermgr struct {
 	chn map[string]chan TaskRequest
 	hc  map[string]*hotContainerSupervisor
 }
 
-func (h *hotcontainermgr) GetPipe(ctx context.Context, rnr *Runner, cfg *Config) chan TaskRequest {
+func (h *hotcontainermgr) getPipe(ctx context.Context, rnr *Runner, cfg *Config) chan TaskRequest {
 	if h.chn == nil {
 		h.chn = make(map[string]chan TaskRequest)
 		h.hc = make(map[string]*hotContainerSupervisor)
@@ -98,7 +150,7 @@ func (h *hotcontainermgr) GetPipe(ctx context.Context, rnr *Runner, cfg *Config)
 		h.chn[image] = make(chan TaskRequest)
 		tasks = h.chn[image]
 		svr := newHotContainerSupervisor(ctx, cfg, rnr, tasks)
-		if err := svr.launch(); err != nil {
+		if err := svr.launch(ctx); err != nil {
 			logrus.WithError(err).Error("cannot start hot container supervisor")
 			return nil
 		}
@@ -108,12 +160,14 @@ func (h *hotcontainermgr) GetPipe(ctx context.Context, rnr *Runner, cfg *Config)
 	return tasks
 }
 
+// hotContainerSupervisor is part of hotcontainermgr, abstracted apart for
+// simplicity, its only purpose is to test for hot containers saturation and
+// try starting as many as needed.
 type hotContainerSupervisor struct {
 	cfg   *Config
 	rnr   *Runner
 	tasks <-chan TaskRequest
 	ping  chan struct{}
-	supervisor.Supervisor
 }
 
 func newHotContainerSupervisor(ctx context.Context, cfg *Config, rnr *Runner, tasks <-chan TaskRequest) *hotContainerSupervisor {
@@ -123,28 +177,20 @@ func newHotContainerSupervisor(ctx context.Context, cfg *Config, rnr *Runner, ta
 		rnr:   rnr,
 		tasks: tasks,
 		ping:  ping,
-		Supervisor: supervisor.Supervisor{
-			Name:        fmt.Sprintf("hot container manager for %s", cfg.Image),
-			MaxRestarts: supervisor.AlwaysRestart,
-			Log: func(msg interface{}) {
-				logrus.Debug(msg)
-			},
-		},
 	}
-	go svr.Supervisor.Serve(ctx)
 	go svr.scale(ctx)
 	return svr
 }
 
 func (svr *hotContainerSupervisor) scale(ctx context.Context) {
 	for {
-		timeout := time.After(5 * time.Second)
+		timeout := time.After(hotContainerScaleUpTimeout)
 		select {
 		case <-ctx.Done():
 			return
 
 		case <-timeout:
-			if err := svr.launch(); err != nil {
+			if err := svr.launch(ctx); err != nil {
 				logrus.WithError(err).Error("cannot start more hot containers")
 			}
 
@@ -155,7 +201,7 @@ func (svr *hotContainerSupervisor) scale(ctx context.Context) {
 
 }
 
-func (svr *hotContainerSupervisor) launch() error {
+func (svr *hotContainerSupervisor) launch(ctx context.Context) error {
 	// TODO(ccirello): find a better naming strategy than rand.Int()
 	hc, err := newHotContainer(
 		fmt.Sprintf("%x", md5.Sum([]byte(fmt.Sprint(svr.cfg.Image, "-", rand.Int())))),
@@ -168,10 +214,13 @@ func (svr *hotContainerSupervisor) launch() error {
 	if err != nil {
 		return err
 	}
-	svr.AddService(hc, supervisor.Transient)
+	go hc.serve(ctx)
 	return nil
 }
 
+// hotcontainer actually interfaces an incoming task from the common concurrency
+// stream into a long lived container. If idle long enough, it will stop. It
+// uses route configuration to determine which protocol to use.
 type hotcontainer struct {
 	name  string
 	image string
@@ -219,18 +268,14 @@ func newHotContainer(name, image string, proto protocol.Protocol, tasks <-chan T
 	return hc, nil
 }
 
-func (hc *hotcontainer) String() string {
-	return fmt.Sprintf("hot container %v", hc.name)
-}
-
-func (hc *hotcontainer) Serve(ctx context.Context) {
+func (hc *hotcontainer) serve(ctx context.Context) {
 	lctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		wg.Done()
 		for {
-			inactivity := time.After(1 * time.Second)
+			inactivity := time.After(hotContainerScaleDownTimeout)
 
 			select {
 			case <-lctx.Done():
@@ -281,14 +326,6 @@ func runTaskReq(rnr *Runner, wg *sync.WaitGroup, task TaskRequest) {
 		close(task.Response)
 	default:
 	}
-}
-
-func RunTask(tasks chan TaskRequest, ctx context.Context, cfg *Config) (drivers.RunResult, error) {
-	tresp := make(chan TaskResponse)
-	treq := TaskRequest{Ctx: ctx, Config: cfg, Response: tresp}
-	tasks <- treq
-	resp := <-treq.Response
-	return resp.Result, resp.Err
 }
 
 type runResult struct {

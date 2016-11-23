@@ -9,6 +9,10 @@ import (
 	"net/http/httputil"
 )
 
+// HTTPProtocol converts stdin/stdout streams into HTTP/1.1 compliant
+// communication. It relies on Content-Length to know when to stop reading from
+// containers stdout. It also mandates valid HTTP headers back and forth, thus
+// returning errors in case of parsing problems.
 type HTTPProtocol struct {
 	in  io.Writer
 	out io.Reader
