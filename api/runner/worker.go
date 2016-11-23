@@ -2,10 +2,7 @@ package runner
 
 import (
 	"context"
-	"crypto/md5"
-	"fmt"
 	"io"
-	"math/rand"
 	"os"
 	"sync"
 	"time"
@@ -202,10 +199,8 @@ func (svr *hotContainerSupervisor) scale(ctx context.Context) {
 }
 
 func (svr *hotContainerSupervisor) launch(ctx context.Context) error {
-	// TODO(ccirello): find a better naming strategy than rand.Int()
 	hc, err := newHotContainer(
-		fmt.Sprintf("%x", md5.Sum([]byte(fmt.Sprint(svr.cfg.Image, "-", rand.Int())))),
-		svr.cfg.Image,
+		svr.cfg,
 		protocol.Protocol(svr.cfg.Format),
 		svr.tasks,
 		svr.rnr,
@@ -222,8 +217,7 @@ func (svr *hotContainerSupervisor) launch(ctx context.Context) error {
 // stream into a long lived container. If idle long enough, it will stop. It
 // uses route configuration to determine which protocol to use.
 type hotcontainer struct {
-	name  string
-	image string
+	cfg   *Config
 	proto protocol.ContainerIO
 	tasks <-chan TaskRequest
 	ping  <-chan struct{}
@@ -240,7 +234,7 @@ type hotcontainer struct {
 	rnr *Runner
 }
 
-func newHotContainer(name, image string, proto protocol.Protocol, tasks <-chan TaskRequest, rnr *Runner, ping <-chan struct{}) (*hotcontainer, error) {
+func newHotContainer(cfg *Config, proto protocol.Protocol, tasks <-chan TaskRequest, rnr *Runner, ping <-chan struct{}) (*hotcontainer, error) {
 	stdinr, stdinw := io.Pipe()
 	stdoutr, stdoutw := io.Pipe()
 
@@ -250,8 +244,7 @@ func newHotContainer(name, image string, proto protocol.Protocol, tasks <-chan T
 	}
 
 	hc := &hotcontainer{
-		name:  name,
-		image: image,
+		cfg:   cfg,
 		proto: p,
 		tasks: tasks,
 		ping:  ping,
@@ -304,13 +297,11 @@ func (hc *hotcontainer) serve(ctx context.Context) {
 		}
 	}()
 
-	result, err := hc.rnr.Run(lctx, &Config{
-		ID:     hc.name,
-		Image:  hc.image,
-		Stdin:  hc.containerIn,
-		Stdout: hc.containerOut,
-		Stderr: os.Stderr,
-	})
+	cfg := *hc.cfg
+	cfg.Stdin = hc.containerIn
+	cfg.Stdout = hc.containerOut
+	cfg.Stderr = os.Stderr
+	result, err := hc.rnr.Run(lctx, &cfg)
 	if err != nil {
 		logrus.WithError(err).Error("hot container failure")
 	}
