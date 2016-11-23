@@ -74,7 +74,7 @@ func initFn() cli.Command {
 			cli.StringFlag{
 				Name:        "format",
 				Usage:       "hot container IO format - json or http",
-				Destination: a.format,
+				Destination: &a.format,
 				Value:       "",
 			},
 		},
