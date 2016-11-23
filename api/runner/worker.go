@@ -9,23 +9,9 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/iron-io/functions/api/runner/protocol"
+	"github.com/iron-io/functions/api/runner/task"
 	"github.com/iron-io/runner/drivers"
 )
-
-// TaskRequest stores the task to be executed by the common concurrency stream,
-// whatever type the ask actually is, either sync or async. It holds in itself
-// the channel to return its response to its caller.
-type TaskRequest struct {
-	Ctx      context.Context
-	Config   *Config
-	Response chan TaskResponse
-}
-
-// TaskResponse holds the response metainformation of a TaskRequest
-type TaskResponse struct {
-	Result drivers.RunResult
-	Err    error
-}
 
 // Hot containers - theory of operation
 //
@@ -85,7 +71,7 @@ const (
 
 // StartWorkers handle incoming tasks and spawns self-regulating container
 // worker.
-func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan TaskRequest) {
+func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan task.Request) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	var hcmgr hotcontainermgr
@@ -127,33 +113,33 @@ func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan TaskRequest) {
 	}
 }
 
-// RunTask helps sending a TaskRequest into the common concurrency stream.
-func RunTask(tasks chan TaskRequest, ctx context.Context, cfg *Config) (drivers.RunResult, error) {
-	tresp := make(chan TaskResponse)
-	treq := TaskRequest{Ctx: ctx, Config: cfg, Response: tresp}
+// RunTask helps sending a task.Request into the common concurrency stream.
+func RunTask(tasks chan task.Request, ctx context.Context, cfg *task.Config) (drivers.RunResult, error) {
+	tresp := make(chan task.Response)
+	treq := task.Request{Ctx: ctx, Config: cfg, Response: tresp}
 	tasks <- treq
 	resp := <-treq.Response
 	return resp.Result, resp.Err
 }
 
 // hotcontainermgr is the intermediate between the common concurrency stream and
-// hot containers. All hot containers share a single TaskRequest stream per
+// hot containers. All hot containers share a single task.Request stream per
 // image (chn), but each image may have more than one hot container (hc).
 type hotcontainermgr struct {
-	chn map[string]chan TaskRequest
+	chn map[string]chan task.Request
 	hc  map[string]*hotcontainersvr
 }
 
-func (h *hotcontainermgr) getPipe(ctx context.Context, rnr *Runner, cfg *Config) chan TaskRequest {
+func (h *hotcontainermgr) getPipe(ctx context.Context, rnr *Runner, cfg *task.Config) chan task.Request {
 	if h.chn == nil {
-		h.chn = make(map[string]chan TaskRequest)
+		h.chn = make(map[string]chan task.Request)
 		h.hc = make(map[string]*hotcontainersvr)
 	}
 
 	image := cfg.Image
 	tasks, ok := h.chn[image]
 	if !ok {
-		h.chn[image] = make(chan TaskRequest)
+		h.chn[image] = make(chan task.Request)
 		tasks = h.chn[image]
 		svr := newHotcontainersvr(ctx, cfg, rnr, tasks)
 		if err := svr.launch(ctx); err != nil {
@@ -171,19 +157,19 @@ func (h *hotcontainermgr) getPipe(ctx context.Context, rnr *Runner, cfg *Config)
 // try starting as many as needed. In case of absence of workload, it will stop
 // trying to start new hot containers.
 type hotcontainersvr struct {
-	cfg      *Config
+	cfg      *task.Config
 	rnr      *Runner
-	tasksin  <-chan TaskRequest
-	tasksout chan TaskRequest
+	tasksin  <-chan task.Request
+	tasksout chan task.Request
 	maxc     chan struct{}
 }
 
-func newHotcontainersvr(ctx context.Context, cfg *Config, rnr *Runner, tasks <-chan TaskRequest) *hotcontainersvr {
+func newHotcontainersvr(ctx context.Context, cfg *task.Config, rnr *Runner, tasks <-chan task.Request) *hotcontainersvr {
 	svr := &hotcontainersvr{
 		cfg:      cfg,
 		rnr:      rnr,
 		tasksin:  tasks,
-		tasksout: make(chan TaskRequest, 1),
+		tasksout: make(chan task.Request, 1),
 		maxc:     make(chan struct{}, cfg.MaxConcurrency),
 	}
 
@@ -254,9 +240,9 @@ func (svr *hotcontainersvr) launch(ctx context.Context) error {
 // stream into a long lived container. If idle long enough, it will stop. It
 // uses route configuration to determine which protocol to use.
 type hotcontainer struct {
-	cfg   *Config
+	cfg   *task.Config
 	proto protocol.ContainerIO
-	tasks <-chan TaskRequest
+	tasks <-chan task.Request
 
 	// Side of the pipe that takes information from outer world
 	// and injects into the container.
@@ -270,7 +256,7 @@ type hotcontainer struct {
 	rnr *Runner
 }
 
-func newHotcontainer(cfg *Config, proto protocol.Protocol, tasks <-chan TaskRequest, rnr *Runner) (*hotcontainer, error) {
+func newHotcontainer(cfg *task.Config, proto protocol.Protocol, tasks <-chan task.Request, rnr *Runner) (*hotcontainer, error) {
 	stdinr, stdinw := io.Pipe()
 	stdoutr, stdoutw := io.Pipe()
 
@@ -312,17 +298,17 @@ func (hc *hotcontainer) serve(ctx context.Context) {
 			case <-inactivity:
 				cancel()
 
-			case task := <-hc.tasks:
-				if err := hc.proto.Dispatch(lctx, task.Config.Stdin, task.Config.Stdout); err != nil {
+			case t := <-hc.tasks:
+				if err := hc.proto.Dispatch(lctx, t); err != nil {
 					logrus.WithField("ctx", lctx).Info("task failed")
-					task.Response <- TaskResponse{
+					t.Response <- task.Response{
 						&runResult{StatusValue: "error", error: err},
 						err,
 					}
 					continue
 				}
 
-				task.Response <- TaskResponse{
+				t.Response <- task.Response{
 					&runResult{StatusValue: "success"},
 					nil,
 				}
@@ -344,12 +330,12 @@ func (hc *hotcontainer) serve(ctx context.Context) {
 	wg.Wait()
 }
 
-func runTaskReq(rnr *Runner, wg *sync.WaitGroup, task TaskRequest) {
+func runTaskReq(rnr *Runner, wg *sync.WaitGroup, t task.Request) {
 	defer wg.Done()
-	result, err := rnr.Run(task.Ctx, task.Config)
+	result, err := rnr.Run(t.Ctx, t.Config)
 	select {
-	case task.Response <- TaskResponse{result, err}:
-		close(task.Response)
+	case t.Response <- task.Response{result, err}:
+		close(t.Response)
 	default:
 	}
 }

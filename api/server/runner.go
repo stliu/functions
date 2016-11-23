@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/iron-io/functions/api/models"
 	"github.com/iron-io/functions/api/runner"
+	"github.com/iron-io/functions/api/runner/task"
 	"github.com/iron-io/runner/common"
 	uuid "github.com/satori/go.uuid"
 )
@@ -167,7 +168,7 @@ func (s *Server) serve(c *gin.Context, log logrus.FieldLogger, appName string, f
 		envVars[ToEnvName("HEADER", header)] = strings.Join(value, " ")
 	}
 
-	cfg := &runner.Config{
+	cfg := &task.Config{
 		AppName:        appName,
 		Env:            envVars,
 		Format:         found.Format,

@@ -2,7 +2,8 @@ package protocol
 
 import (
 	"context"
-	"io"
+
+	"github.com/iron-io/functions/api/runner/task"
 )
 
 // DefaultProtocol is the protocol used by cold-containers
@@ -13,6 +14,6 @@ func (p *DefaultProtocol) IsStreamable() bool {
 	return false
 }
 
-func (p *DefaultProtocol) Dispatch(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+func (p *DefaultProtocol) Dispatch(ctx context.Context, t task.Request) error {
 	return nil
 }

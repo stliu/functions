@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+
+	"github.com/iron-io/functions/api/runner/task"
 )
 
 // JSONProtocol converts stdin/stdout streams into JSON calls. It assumes that
@@ -21,16 +23,17 @@ func (p *JSONProtocol) IsStreamable() bool {
 	return true
 }
 
-func (p *JSONProtocol) Dispatch(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+func (p *JSONProtocol) Dispatch(ctx context.Context, t task.Request) error {
 	var retErr error
 	done := make(chan struct{})
 	go func() {
 		var body bytes.Buffer
-		io.Copy(&body, stdin)
+		io.Copy(&body, t.Config.Stdin)
 
 		payload := struct {
+			Env     map[string]string
 			Payload string
-		}{body.String()}
+		}{t.Config.Env, body.String()}
 		if err := json.NewEncoder(p.in).Encode(payload); err != nil {
 			retErr = err
 			return
@@ -38,6 +41,7 @@ func (p *JSONProtocol) Dispatch(ctx context.Context, stdin io.Reader, stdout io.
 
 		var tmp interface{}
 		json.NewDecoder(p.out).Decode(&tmp)
+		json.NewEncoder(t.Config.Stdout).Encode(tmp)
 		done <- struct{}{}
 	}()
 

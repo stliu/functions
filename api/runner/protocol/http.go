@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
+	"time"
+
+	"github.com/iron-io/functions/api/runner/task"
 )
 
 // HTTPProtocol converts stdin/stdout streams into HTTP/1.1 compliant
@@ -23,16 +27,19 @@ func (p *HTTPProtocol) IsStreamable() bool {
 	return true
 }
 
-func (p *HTTPProtocol) Dispatch(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+func (p *HTTPProtocol) Dispatch(ctx context.Context, t task.Request) error {
 	var retErr error
 	done := make(chan struct{})
 	go func() {
 		var body bytes.Buffer
-		io.Copy(&body, stdin)
+		io.Copy(&body, t.Config.Stdin)
 		req, err := http.NewRequest("GET", "/", &body)
 		if err != nil {
 			retErr = err
 			return
+		}
+		for k, v := range t.Config.Env {
+			req.Header.Set(k, v)
 		}
 		req.Header.Set("Content-Length", fmt.Sprint(body.Len()))
 		raw, err := httputil.DumpRequest(req, true)
@@ -48,14 +55,17 @@ func (p *HTTPProtocol) Dispatch(ctx context.Context, stdin io.Reader, stdout io.
 			return
 		}
 
-		io.Copy(stdout, res.Body)
+		io.Copy(t.Config.Stdout, res.Body)
 		done <- struct{}{}
 	}()
+
+	timeout := time.After(t.Config.Timeout)
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-
+	case <-timeout:
+		return errors.New("timeout")
 	case <-done:
 		return retErr
 	}

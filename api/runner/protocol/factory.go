@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/iron-io/functions/api/models"
+	"github.com/iron-io/functions/api/runner/task"
 )
 
 var errInvalidProtocol = errors.New("Invalid Protocol")
@@ -15,7 +16,7 @@ var errInvalidProtocol = errors.New("Invalid Protocol")
 // It returns any protocol error, if present.
 type ContainerIO interface {
 	IsStreamable() bool
-	Dispatch(ctx context.Context, stdin io.Reader, stdout io.Writer) error
+	Dispatch(ctx context.Context, t task.Request) error
 }
 
 // Protocol defines all protocols that operates a ContainerIO.
