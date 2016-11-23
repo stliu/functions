@@ -18,7 +18,8 @@ const routesTableCreate = `
 CREATE TABLE IF NOT EXISTS routes (
 	app_name character varying(256) NOT NULL,
 	path text NOT NULL,
-    image character varying(256) NOT NULL,
+	image character varying(256) NOT NULL,
+	format character varying(16) NOT NULL,
 	memory integer NOT NULL,
 	headers text NOT NULL,
 	config text NOT NULL,
@@ -258,17 +259,19 @@ func (ds *PostgresDatastore) InsertRoute(ctx context.Context, route *models.Rout
 
 	_, err = ds.db.Exec(`
 		INSERT INTO routes (
-			app_name, 
-			path, 
+			app_name,
+			path,
 			image,
+			format,
 			memory,
 			headers,
 			config
 		)
-		VALUES ($1, $2, $3, $4, $5, $6);`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7);`,
 		route.AppName,
 		route.Path,
 		route.Image,
+		route.Format,
 		route.Memory,
 		string(hbyte),
 		string(cbyte),
@@ -302,13 +305,15 @@ func (ds *PostgresDatastore) UpdateRoute(ctx context.Context, route *models.Rout
 	res, err := ds.db.Exec(`
 		UPDATE routes SET
 			image = $3,
-			memory = $4,
-			headers = $5,
-			config = $6
+			format = $4,
+			memory = $5,
+			headers = $6,
+			config = $7
 		WHERE app_name = $1 AND path = $2;`,
 		route.AppName,
 		route.Path,
 		route.Image,
+		route.Format,
 		route.Memory,
 		string(hbyte),
 		string(cbyte),
@@ -370,6 +375,8 @@ func scanRoute(scanner rowScanner, route *models.Route) error {
 		&route.Image,
 		&route.Memory,
 		&headerStr,
+		&route.Type,
+		&route.Format,
 		&configStr,
 	)
 

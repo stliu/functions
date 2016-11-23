@@ -337,6 +337,7 @@ func (ds *BoltDatastore) UpdateRoute(ctx context.Context, newroute *models.Route
 		if route.Type != "" {
 			route.Type = newroute.Type
 		}
+		route.Format = newroute.Format
 		if newroute.Headers != nil {
 			if route.Config == nil {
 				route.Config = map[string]string{}

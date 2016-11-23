@@ -20,7 +20,6 @@ func handleRouteGet(c *gin.Context) {
 
 	route, err := Api.Datastore.GetRoute(ctx, appName, routePath)
 	if err != nil && err != models.ErrRoutesNotFound {
-
 		log.WithError(err).Error(models.ErrRoutesGet)
 		c.JSON(http.StatusInternalServerError, simpleError(models.ErrRoutesGet))
 		return
