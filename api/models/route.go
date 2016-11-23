@@ -25,14 +25,15 @@ var (
 type Routes []*Route
 
 type Route struct {
-	AppName string      `json:"app_name,omitempty"`
-	Path    string      `json:"path,omitempty"`
-	Image   string      `json:"image,omitempty"`
-	Memory  uint64      `json:"memory,omitempty"`
-	Headers http.Header `json:"headers,omitempty"`
-	Type    string      `json:"type,omitempty"`
-	Format  string      `json:"format,omitempty"`
-	Config  `json:"config"`
+	AppName        string      `json:"app_name,omitempty"`
+	Path           string      `json:"path,omitempty"`
+	Image          string      `json:"image,omitempty"`
+	Memory         uint64      `json:"memory,omitempty"`
+	Headers        http.Header `json:"headers,omitempty"`
+	Type           string      `json:"type,omitempty"`
+	Format         string      `json:"format,omitempty"`
+	MaxConcurrency int         `json:"max_concurrency,omitempty"`
+	Config         `json:"config"`
 }
 
 var (
@@ -86,6 +87,10 @@ func (r *Route) Validate() error {
 
 	if r.Format != FormatDefault && r.Format != FormatHTTP && r.Format != FormatJSON {
 		res = append(res, ErrRoutesValidationInvalidFormat)
+	}
+
+	if r.MaxConcurrency == 0 && (r.Format == FormatHTTP || r.Format == FormatJSON) {
+		r.MaxConcurrency = 1
 	}
 
 	if len(res) > 0 {

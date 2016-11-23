@@ -3,6 +3,7 @@ package protocol
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,25 +23,40 @@ func (p *HTTPProtocol) IsStreamable() bool {
 	return true
 }
 
-func (p *HTTPProtocol) Dispatch(stdin io.Reader, stdout io.Writer) error {
-	var body bytes.Buffer
-	io.Copy(&body, stdin)
-	req, err := http.NewRequest("GET", "/", &body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Length", fmt.Sprint(body.Len()))
-	raw, err := httputil.DumpRequest(req, true)
-	if err != nil {
-		return err
-	}
-	p.in.Write(raw)
+func (p *HTTPProtocol) Dispatch(ctx context.Context, stdin io.Reader, stdout io.Writer) error {
+	var retErr error
+	done := make(chan struct{})
+	go func() {
+		var body bytes.Buffer
+		io.Copy(&body, stdin)
+		req, err := http.NewRequest("GET", "/", &body)
+		if err != nil {
+			retErr = err
+			return
+		}
+		req.Header.Set("Content-Length", fmt.Sprint(body.Len()))
+		raw, err := httputil.DumpRequest(req, true)
+		if err != nil {
+			retErr = err
+			return
+		}
+		p.in.Write(raw)
 
-	res, err := http.ReadResponse(bufio.NewReader(p.out), req)
-	if err != nil {
-		return err
-	}
+		res, err := http.ReadResponse(bufio.NewReader(p.out), req)
+		if err != nil {
+			retErr = err
+			return
+		}
 
-	io.Copy(stdout, res.Body)
-	return nil
+		io.Copy(stdout, res.Body)
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+
+	case <-done:
+		return retErr
+	}
 }

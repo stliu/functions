@@ -117,6 +117,7 @@ func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan TaskRequest) {
 				go runTaskReq(rnr, &wg, task)
 				continue
 			}
+
 			select {
 			case <-ctx.Done():
 				return
@@ -173,15 +174,16 @@ type hotcontainersvr struct {
 	rnr   *Runner
 	tasks <-chan TaskRequest
 	ping  chan struct{}
+	maxc  chan struct{}
 }
 
 func newHotcontainersvr(ctx context.Context, cfg *Config, rnr *Runner, tasks <-chan TaskRequest) *hotcontainersvr {
-	ping := make(chan struct{})
 	svr := &hotcontainersvr{
 		cfg:   cfg,
 		rnr:   rnr,
 		tasks: tasks,
-		ping:  ping,
+		ping:  make(chan struct{}),
+		maxc:  make(chan struct{}, cfg.MaxConcurrency),
 	}
 	go svr.scale(ctx)
 	return svr
@@ -207,17 +209,25 @@ func (svr *hotcontainersvr) scale(ctx context.Context) {
 }
 
 func (svr *hotcontainersvr) launch(ctx context.Context) error {
-	hc, err := newHotcontainer(
-		svr.cfg,
-		protocol.Protocol(svr.cfg.Format),
-		svr.tasks,
-		svr.rnr,
-		svr.ping,
-	)
-	if err != nil {
-		return err
+	select {
+	case svr.maxc <- struct{}{}:
+		hc, err := newHotcontainer(
+			svr.cfg,
+			protocol.Protocol(svr.cfg.Format),
+			svr.tasks,
+			svr.rnr,
+			svr.ping,
+		)
+		if err != nil {
+			return err
+		}
+		go func() {
+			hc.serve(ctx)
+			<-svr.maxc
+		}()
+	default:
 	}
-	go hc.serve(ctx)
+
 	return nil
 }
 
@@ -283,13 +293,13 @@ func (hc *hotcontainer) serve(ctx context.Context) {
 				return
 
 			case <-inactivity:
-				logrus.WithField("ctx", lctx).Info("stoping hot container")
 				cancel()
 
 			case <-hc.ping:
 
 			case task := <-hc.tasks:
-				if err := hc.proto.Dispatch(task.Config.Stdin, task.Config.Stdout); err != nil {
+				if err := hc.proto.Dispatch(lctx, task.Config.Stdin, task.Config.Stdout); err != nil {
+					logrus.WithField("ctx", lctx).Info("task failed")
 					task.Response <- TaskResponse{
 						&runResult{StatusValue: "error", error: err},
 						err,
@@ -306,6 +316,7 @@ func (hc *hotcontainer) serve(ctx context.Context) {
 	}()
 
 	cfg := *hc.cfg
+	cfg.Timeout = 0 // add a timeout to simulate ab.end. failure.
 	cfg.Stdin = hc.containerIn
 	cfg.Stdout = hc.containerOut
 	cfg.Stderr = os.Stderr
@@ -314,6 +325,7 @@ func (hc *hotcontainer) serve(ctx context.Context) {
 		logrus.WithError(err).Error("hot container failure")
 	}
 	logrus.WithField("result", result).Info("hot container done")
+	cancel()
 	wg.Wait()
 }
 

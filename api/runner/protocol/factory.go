@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"context"
 	"errors"
 	"io"
 
@@ -14,7 +15,7 @@ var errInvalidProtocol = errors.New("Invalid Protocol")
 // It returns any protocol error, if present.
 type ContainerIO interface {
 	IsStreamable() bool
-	Dispatch(stdin io.Reader, stdout io.Writer) error
+	Dispatch(ctx context.Context, stdin io.Reader, stdout io.Writer) error
 }
 
 // Protocol defines all protocols that operates a ContainerIO.

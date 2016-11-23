@@ -338,6 +338,7 @@ func (ds *BoltDatastore) UpdateRoute(ctx context.Context, newroute *models.Route
 			route.Type = newroute.Type
 		}
 		route.Format = newroute.Format
+		route.MaxConcurrency = newroute.MaxConcurrency
 		if newroute.Headers != nil {
 			if route.Config == nil {
 				route.Config = map[string]string{}

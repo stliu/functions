@@ -344,6 +344,10 @@ definitions:
               - http
               - json
             description: Payload format sent into function.
+          max_concurrency:
+            type: integer
+            format: int32
+            description: Maximum number of hot containers concurrency
           config:
             type: object
             description: Route configuration - overrides application configuration
