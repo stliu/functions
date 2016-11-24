@@ -33,7 +33,7 @@ import (
 // same. Refer to api/runner/protocol.go for details of these communications.
 //
 // Hot Containers implementation relies in two moving parts (drawn below):
-// hotcontainermgr and hotcontainer. Refer to their respective comments for
+// htcntrmgr and htcntr. Refer to their respective comments for
 // details.
 //                             │
 //                         Incoming
@@ -62,11 +62,11 @@ import (
 //          (ping)                      (internal clock)
 
 // These are the two clocks important for hot containers life cycle. Scales up
-// if no Hot Container does not pick any task in hotContainerScaleUpTimeout.
-// Scales down if the container is idle for hotContainerScaleDownTimeout.
+// if no Hot Container does not pick any task in htcntrScaleUpTimeout.
+// Scales down if the container is idle for htcntrScaleDownTimeout.
 const (
-	hotContainerScaleUpTimeout   = 300 * time.Millisecond
-	hotContainerScaleDownTimeout = 30 * time.Second
+	htcntrScaleUpTimeout   = 300 * time.Millisecond
+	htcntrScaleDownTimeout = 30 * time.Second
 )
 
 // StartWorkers handle incoming tasks and spawns self-regulating container
@@ -74,7 +74,7 @@ const (
 func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan task.Request) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	var hcmgr hotcontainermgr
+	var hcmgr htcntrmgr
 
 	for {
 		select {
@@ -122,26 +122,27 @@ func RunTask(tasks chan task.Request, ctx context.Context, cfg *task.Config) (dr
 	return resp.Result, resp.Err
 }
 
-// hotcontainermgr is the intermediate between the common concurrency stream and
+// htcntrmgr is the intermediate between the common concurrency stream and
 // hot containers. All hot containers share a single task.Request stream per
 // image (chn), but each image may have more than one hot container (hc).
-type hotcontainermgr struct {
+type htcntrmgr struct {
 	chn map[string]chan task.Request
-	hc  map[string]*hotcontainersvr
+	hc  map[string]*htcntrsvr
 }
 
-func (h *hotcontainermgr) getPipe(ctx context.Context, rnr *Runner, cfg *task.Config) chan task.Request {
+func (h *htcntrmgr) getPipe(ctx context.Context, rnr *Runner, cfg *task.Config) chan task.Request {
 	if h.chn == nil {
 		h.chn = make(map[string]chan task.Request)
-		h.hc = make(map[string]*hotcontainersvr)
+		h.hc = make(map[string]*htcntrsvr)
 	}
 
+	// TODO(ccirello): different routes can use the same image differently. Must handle this case
 	image := cfg.Image
 	tasks, ok := h.chn[image]
 	if !ok {
 		h.chn[image] = make(chan task.Request)
 		tasks = h.chn[image]
-		svr := newHotcontainersvr(ctx, cfg, rnr, tasks)
+		svr := newhtcntrsvr(ctx, cfg, rnr, tasks)
 		if err := svr.launch(ctx); err != nil {
 			logrus.WithError(err).Error("cannot start hot container supervisor")
 			return nil
@@ -152,11 +153,11 @@ func (h *hotcontainermgr) getPipe(ctx context.Context, rnr *Runner, cfg *task.Co
 	return tasks
 }
 
-// hotcontainersvr is part of hotcontainermgr, abstracted apart for
-// simplicity, its only purpose is to test for hot containers saturation and
-// try starting as many as needed. In case of absence of workload, it will stop
-// trying to start new hot containers.
-type hotcontainersvr struct {
+// htcntrsvr is part of htcntrmgr, abstracted apart for simplicity, its only
+// purpose is to test for hot containers saturation and try starting as many as
+// needed. In case of absence of workload, it will stop trying to start new hot
+// containers.
+type htcntrsvr struct {
 	cfg      *task.Config
 	rnr      *Runner
 	tasksin  <-chan task.Request
@@ -164,8 +165,8 @@ type hotcontainersvr struct {
 	maxc     chan struct{}
 }
 
-func newHotcontainersvr(ctx context.Context, cfg *task.Config, rnr *Runner, tasks <-chan task.Request) *hotcontainersvr {
-	svr := &hotcontainersvr{
+func newhtcntrsvr(ctx context.Context, cfg *task.Config, rnr *Runner, tasks <-chan task.Request) *htcntrsvr {
+	svr := &htcntrsvr{
 		cfg:      cfg,
 		rnr:      rnr,
 		tasksin:  tasks,
@@ -186,7 +187,7 @@ func newHotcontainersvr(ctx context.Context, cfg *task.Config, rnr *Runner, task
 	return svr
 }
 
-func (svr *hotcontainersvr) pipe(ctx context.Context) {
+func (svr *htcntrsvr) pipe(ctx context.Context) {
 	for t := range svr.tasksin {
 		svr.tasksout <- t
 		select {
@@ -197,9 +198,9 @@ func (svr *hotcontainersvr) pipe(ctx context.Context) {
 	}
 }
 
-func (svr *hotcontainersvr) scale(ctx context.Context) {
+func (svr *htcntrsvr) scale(ctx context.Context) {
 	for {
-		timeout := time.After(hotContainerScaleUpTimeout)
+		timeout := time.After(htcntrScaleUpTimeout)
 		select {
 		case <-ctx.Done():
 			return
@@ -214,10 +215,10 @@ func (svr *hotcontainersvr) scale(ctx context.Context) {
 	}
 }
 
-func (svr *hotcontainersvr) launch(ctx context.Context) error {
+func (svr *htcntrsvr) launch(ctx context.Context) error {
 	select {
 	case svr.maxc <- struct{}{}:
-		hc, err := newHotcontainer(
+		hc, err := newhtcntr(
 			svr.cfg,
 			protocol.Protocol(svr.cfg.Format),
 			svr.tasksout,
@@ -236,10 +237,10 @@ func (svr *hotcontainersvr) launch(ctx context.Context) error {
 	return nil
 }
 
-// hotcontainer actually interfaces an incoming task from the common concurrency
+// htcntr actually interfaces an incoming task from the common concurrency
 // stream into a long lived container. If idle long enough, it will stop. It
 // uses route configuration to determine which protocol to use.
-type hotcontainer struct {
+type htcntr struct {
 	cfg   *task.Config
 	proto protocol.ContainerIO
 	tasks <-chan task.Request
@@ -256,7 +257,7 @@ type hotcontainer struct {
 	rnr *Runner
 }
 
-func newHotcontainer(cfg *task.Config, proto protocol.Protocol, tasks <-chan task.Request, rnr *Runner) (*hotcontainer, error) {
+func newhtcntr(cfg *task.Config, proto protocol.Protocol, tasks <-chan task.Request, rnr *Runner) (*htcntr, error) {
 	stdinr, stdinw := io.Pipe()
 	stdoutr, stdoutw := io.Pipe()
 
@@ -265,7 +266,7 @@ func newHotcontainer(cfg *task.Config, proto protocol.Protocol, tasks <-chan tas
 		return nil, err
 	}
 
-	hc := &hotcontainer{
+	hc := &htcntr{
 		cfg:   cfg,
 		proto: p,
 		tasks: tasks,
@@ -282,14 +283,14 @@ func newHotcontainer(cfg *task.Config, proto protocol.Protocol, tasks <-chan tas
 	return hc, nil
 }
 
-func (hc *hotcontainer) serve(ctx context.Context) {
+func (hc *htcntr) serve(ctx context.Context) {
 	lctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		wg.Done()
+		defer wg.Done()
 		for {
-			inactivity := time.After(hotContainerScaleDownTimeout)
+			inactivity := time.After(htcntrScaleDownTimeout)
 
 			select {
 			case <-lctx.Done():
