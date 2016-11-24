@@ -12,6 +12,8 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/boltdb/bolt"
 	"github.com/iron-io/functions/api/models"
+	"regexp"
+	"strings"
 )
 
 type BoltDatastore struct {
@@ -199,7 +201,9 @@ func (ds *BoltDatastore) GetApps(ctx context.Context, filter *models.AppFilter) 
 			if err != nil {
 				return err
 			}
-			res = append(res, app)
+			if applyAppFilter(app, filter) {
+				res = append(res, app)
+			}
 			return nil
 		})
 		if err2 != nil {
@@ -446,7 +450,7 @@ func (ds *BoltDatastore) GetRoutesByApp(ctx context.Context, appName string, fil
 			if err != nil {
 				return err
 			}
-			if models.ApplyRouteFilter(&route, filter) {
+			if applyRouteFilter(&route, filter) {
 				i++
 				res = append(res, &route)
 			}
@@ -482,7 +486,7 @@ func (ds *BoltDatastore) GetRoutes(ctx context.Context, filter *models.RouteFilt
 				if err != nil {
 					return err
 				}
-				if models.ApplyRouteFilter(&route, filter) {
+				if applyRouteFilter(&route, filter) {
 					i++
 					res = append(res, &route)
 				}
@@ -513,4 +517,19 @@ func (ds *BoltDatastore) Get(ctx context.Context, key []byte) ([]byte, error) {
 		return nil
 	})
 	return ret, nil
+}
+
+func applyAppFilter(app *models.App, filter *models.AppFilter) bool {
+	if filter != nil && filter.Name != "" {
+		nameLike, err := regexp.MatchString(strings.Replace(filter.Name, "%", ".*", -1), app.Name)
+		return err == nil && nameLike
+	}
+
+	return true
+}
+
+func applyRouteFilter(route *models.Route, filter *models.RouteFilter) bool {
+	return filter == nil || (filter.Path == "" || route.Path == filter.Path) &&
+		(filter.AppName == "" || route.AppName == filter.AppName) &&
+		(filter.Image == "" || route.Image == filter.Image)
 }
