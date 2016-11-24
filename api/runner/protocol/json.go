@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"time"
 
+	"github.com/iron-io/functions/api/models"
 	"github.com/iron-io/functions/api/runner/task"
 )
 
@@ -45,9 +47,13 @@ func (p *JSONProtocol) Dispatch(ctx context.Context, t task.Request) error {
 		done <- struct{}{}
 	}()
 
+	timeout := time.After(t.Config.Timeout)
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-timeout:
+		return models.ErrRunnerTimeout
 	case <-done:
 		return nil
 	}

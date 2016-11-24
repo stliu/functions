@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
 	"time"
 
+	"github.com/iron-io/functions/api/models"
 	"github.com/iron-io/functions/api/runner/task"
 )
 
@@ -65,7 +65,7 @@ func (p *HTTPProtocol) Dispatch(ctx context.Context, t task.Request) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-timeout:
-		return errors.New("timeout")
+		return models.ErrRunnerTimeout
 	case <-done:
 		return retErr
 	}
