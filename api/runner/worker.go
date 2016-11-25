@@ -27,7 +27,7 @@ import (
 // Stdin and feeds incoming tasks with Stdout.
 //
 // Each execution is the alternation of feeding hot containers stdin with tasks
-// stdin, and reading the answer back from containers stdout. For both `Format`s
+// stdin, and reading the answer back from containers stdout. For all `Format`s
 // we send embedded into the message metadata to help the container to know when
 // to stop reading from its stdin and Functions expect the container to do the
 // same. Refer to api/runner/protocol.go for details of these communications.
@@ -48,15 +48,15 @@ import (
 //                      ┌──────▼────────┐
 //                     ┌┴──────────────┐│
 //                     │   Per Image   ││
-//             ┌───────│ Hot Container │├───────┐
-//             │       │    Manager    ├┘       │
-//             │       └───────────────┘        │
-//             │               │                │
-//             ▼               ▼                ▼
-//       ┌───────────┐   ┌───────────┐    ┌───────────┐
-//       │    Hot    │   │    Hot    │    │    Hot    │
-//       │ Container │   │ Container │    │ Container │
-//       └───────────┘   └───────────┘    └───────────┘
+//             ┌───────│ Hot Container │├──────┐
+//             │       │    Manager    ├┘      │
+//             │       └───────────────┘       │
+//             │               │               │
+//             ▼               ▼               ▼
+//       ┌───────────┐   ┌───────────┐   ┌───────────┐
+//       │    Hot    │   │    Hot    │   │    Hot    │
+//       │ Container │   │ Container │   │ Container │
+//       └───────────┘   └───────────┘   └───────────┘
 //                                           Timeout
 //                                           Terminate
 //                                           (internal clock)
@@ -166,12 +166,11 @@ func newhtcntrsvr(ctx context.Context, cfg *task.Config, rnr *Runner, tasks <-ch
 	}
 
 	// This pipe will take all incoming tasks and just forward them to the
-	// started hot containers. The catch here is that it feeds off an
-	// buffered channel from an unbuffered one. And this buffered channel is
-	// then used to determine the presence of pending tasks.
+	// started hot containers. The catch here is that it feeds a buffered
+	// channel from an unbuffered one. And this buffered channel is
+	// then used to determine the presence of running hot containers.
 	// If no hot container is available, tasksout will fill up to its
-	// capacity, pipe() will use this information to know whether it must
-	// start or not new hot containers.
+	// capacity and pipe() will start them.
 	go svr.pipe(ctx)
 	return svr
 }
