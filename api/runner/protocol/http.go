@@ -42,6 +42,7 @@ func (p *HTTPProtocol) Dispatch(ctx context.Context, t task.Request) error {
 			req.Header.Set(k, v)
 		}
 		req.Header.Set("Content-Length", fmt.Sprint(body.Len()))
+		req.Header.Set("Task-ID", t.Config.ID)
 		raw, err := httputil.DumpRequest(req, true)
 		if err != nil {
 			retErr = err

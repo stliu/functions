@@ -33,9 +33,10 @@ func (p *JSONProtocol) Dispatch(ctx context.Context, t task.Request) error {
 		io.Copy(&body, t.Config.Stdin)
 
 		payload := struct {
+			TaskID  string
 			Env     map[string]string
 			Payload string
-		}{t.Config.Env, body.String()}
+		}{t.Config.ID, t.Config.Env, body.String()}
 		if err := json.NewEncoder(p.in).Encode(payload); err != nil {
 			retErr = err
 			return
