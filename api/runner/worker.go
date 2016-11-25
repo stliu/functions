@@ -311,9 +311,9 @@ func (hc *htcntr) serve(ctx context.Context) {
 	if err != nil {
 		logrus.WithError(err).Error("hot container failure detected")
 	}
-	logrus.WithField("result", result).Info("hot container terminated")
 	cancel()
 	wg.Wait()
+	logrus.WithField("result", result).Info("hot container terminated")
 }
 
 func runTaskReq(rnr *Runner, wg *sync.WaitGroup, t task.Request) {
