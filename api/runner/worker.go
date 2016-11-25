@@ -89,24 +89,8 @@ func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan task.Request) {
 		case <-ctx.Done():
 			return
 		case task := <-tasks:
-
-			isStream, err := protocol.IsStreamable(task.Config.Format)
-			if err != nil {
-				logrus.WithError(err).Info("could not detect container IO protocol")
-				wg.Add(1)
-				go runTaskReq(rnr, &wg, task)
-				continue
-			}
-
-			if !isStream {
-				wg.Add(1)
-				go runTaskReq(rnr, &wg, task)
-				continue
-			}
-
 			p := hcmgr.getPipe(ctx, rnr, task.Config)
 			if p == nil {
-				logrus.Info("could not find a hot container - running regularly")
 				wg.Add(1)
 				go runTaskReq(rnr, &wg, task)
 				continue
@@ -130,6 +114,14 @@ type htcntrmgr struct {
 }
 
 func (h *htcntrmgr) getPipe(ctx context.Context, rnr *Runner, cfg *task.Config) chan task.Request {
+	isStream, err := protocol.IsStreamable(cfg.Format)
+	if err != nil {
+		logrus.WithError(err).Info("could not detect container IO protocol")
+		return nil
+	} else if !isStream {
+		return nil
+	}
+
 	if h.chn == nil {
 		h.chn = make(map[string]chan task.Request)
 		h.hc = make(map[string]*htcntrsvr)
