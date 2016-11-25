@@ -1,10 +1,10 @@
 package runner
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 
@@ -306,12 +306,47 @@ func (hc *htcntr) serve(ctx context.Context) {
 	cfg.Timeout = 0 // add a timeout to simulate ab.end. failure.
 	cfg.Stdin = hc.containerIn
 	cfg.Stdout = hc.containerOut
-	cfg.Stderr = os.Stderr
+
+	// Why can we not attach stderr to the task like we do for stdin and
+	// stdout?
+	//
+	// Stdin/Stdout are completely known to the scope of the task. You must
+	// have a task stdin to feed containers stdin, and also the other way
+	// around when reading from stdout. So both are directly related to the
+	// life cycle of the request.
+	//
+	// Stderr, on the other hand, can be written by anything any time:
+	// failure between requests, failures inside requests and messages send
+	// right after stdout has been finished being transmitted. Thus, with
+	// hot containers, there is not a 1:1 relation between stderr and tasks.
+	//
+	// Still, we do pass - at protocol level - a Task-ID header, from which
+	// the application running inside the hot container can use to identify
+	// its own stderr output.
+	errr, errw := io.Pipe()
+	cfg.Stderr = errw
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scanner := bufio.NewScanner(errr)
+		for scanner.Scan() {
+			logrus.WithFields(logrus.Fields{
+				"app":             cfg.AppName,
+				"route":           cfg.Path,
+				"image":           cfg.Image,
+				"memory":          cfg.Memory,
+				"format":          cfg.Format,
+				"max_concurrency": cfg.MaxConcurrency,
+			}).Info(scanner.Text())
+		}
+	}()
+
 	result, err := hc.rnr.Run(lctx, &cfg)
 	if err != nil {
 		logrus.WithError(err).Error("hot container failure detected")
 	}
 	cancel()
+	errw.Close()
 	wg.Wait()
 	logrus.WithField("result", result).Info("hot container terminated")
 }
