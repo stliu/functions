@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -65,8 +66,19 @@ const (
 	htcntrScaleDownTimeout = 30 * time.Second
 )
 
-// StartWorkers handle incoming tasks and spawns self-regulating container
-// worker.
+// RunTask helps sending a task.Request into the common concurrency stream.
+// Refer to StartWorkers() to understand what this is about.
+func RunTask(tasks chan task.Request, ctx context.Context, cfg *task.Config) (drivers.RunResult, error) {
+	tresp := make(chan task.Response)
+	treq := task.Request{Ctx: ctx, Config: cfg, Response: tresp}
+	tasks <- treq
+	resp := <-treq.Response
+	return resp.Result, resp.Err
+}
+
+// StartWorkers operates the common concurrency stream, ie, it will process all
+// IronFunctions tasks, either sync or async. In the process, it also dispatches
+// the workload to either regular or hot containers.
 func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan task.Request) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -109,18 +121,9 @@ func StartWorkers(ctx context.Context, rnr *Runner, tasks <-chan task.Request) {
 	}
 }
 
-// RunTask helps sending a task.Request into the common concurrency stream.
-func RunTask(tasks chan task.Request, ctx context.Context, cfg *task.Config) (drivers.RunResult, error) {
-	tresp := make(chan task.Response)
-	treq := task.Request{Ctx: ctx, Config: cfg, Response: tresp}
-	tasks <- treq
-	resp := <-treq.Response
-	return resp.Result, resp.Err
-}
-
 // htcntrmgr is the intermediate between the common concurrency stream and
 // hot containers. All hot containers share a single task.Request stream per
-// image (chn), but each image may have more than one hot container (hc).
+// function (chn), but each function may have more than one hot container (hc).
 type htcntrmgr struct {
 	chn map[string]chan task.Request
 	hc  map[string]*htcntrsvr
@@ -132,18 +135,18 @@ func (h *htcntrmgr) getPipe(ctx context.Context, rnr *Runner, cfg *task.Config) 
 		h.hc = make(map[string]*htcntrsvr)
 	}
 
-	// TODO(ccirello): different routes can use the same image differently. Must handle this case
-	image := cfg.Image
-	tasks, ok := h.chn[image]
+	// TODO(ccirello): re-implement this without memory allocation (fmt.Sprint)
+	fn := fmt.Sprint(cfg.AppName, ",", cfg.Path, cfg.Image, cfg.Timeout, cfg.Memory, cfg.Format, cfg.MaxConcurrency)
+	tasks, ok := h.chn[fn]
 	if !ok {
-		h.chn[image] = make(chan task.Request)
-		tasks = h.chn[image]
+		h.chn[fn] = make(chan task.Request)
+		tasks = h.chn[fn]
 		svr := newhtcntrsvr(ctx, cfg, rnr, tasks)
 		if err := svr.launch(ctx); err != nil {
 			logrus.WithError(err).Error("cannot start hot container supervisor")
 			return nil
 		}
-		h.hc[image] = svr
+		h.hc[fn] = svr
 	}
 
 	return tasks

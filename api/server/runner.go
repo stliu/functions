@@ -170,6 +170,7 @@ func (s *Server) serve(c *gin.Context, log logrus.FieldLogger, appName string, f
 
 	cfg := &task.Config{
 		AppName:        appName,
+		Path:           found.Path,
 		Env:            envVars,
 		Format:         found.Format,
 		ID:             reqID,

@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	ID             string
+	Path           string
 	Image          string
 	Timeout        time.Duration
 	AppName        string
@@ -17,9 +18,10 @@ type Config struct {
 	Env            map[string]string
 	Format         string
 	MaxConcurrency int
-	Stdin          io.Reader
-	Stdout         io.Writer
-	Stderr         io.Writer
+
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // Request stores the task to be executed by the common concurrency stream,
