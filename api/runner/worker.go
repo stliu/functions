@@ -17,10 +17,9 @@ import (
 //
 // A function is converted into a hot container if its `Format` is either
 // models.FormatHTTP or models.FormatJSON. At the very first task request a hot
-// container shall be started and run it. It has two internal clocks: one whose
-// responsibility is to start new hot containers as they get clogged with work;
-// and the other that actually stops the container if it sits doing nothing long
-// enough. In the absence of workload, it just stops the whole clockwork.
+// container shall be started and run it. It has one internal clock: one that
+// actually stops the container if it sits doing nothing long enough. In the
+// absence of workload, it just stops the whole clockwork.
 //
 // Internally, the hot container uses a modified Config whose Stdin and Stdout
 // are bound to an internal pipe. This internal pipe is fed with incoming tasks
@@ -57,15 +56,12 @@ import (
 //       │    Hot    │   │    Hot    │    │    Hot    │
 //       │ Container │   │ Container │    │ Container │
 //       └───────────┘   └───────────┘    └───────────┘
-//          Timeout                          Timeout
-//           Start                          Terminate
-//          (ping)                      (internal clock)
+//                                           Timeout
+//                                           Terminate
+//                                           (internal clock)
 
-// These are the two clocks important for hot containers life cycle. Scales up
-// if no Hot Container does not pick any task in htcntrScaleUpTimeout.
-// Scales down if the container is idle for htcntrScaleDownTimeout.
 const (
-	htcntrScaleUpTimeout   = 300 * time.Millisecond
+	// Terminate hot container after this timeout
 	htcntrScaleDownTimeout = 30 * time.Second
 )
 
@@ -178,39 +174,25 @@ func newhtcntrsvr(ctx context.Context, cfg *task.Config, rnr *Runner, tasks <-ch
 	// started hot containers. The catch here is that it feeds off an
 	// buffered channel from an unbuffered one. And this buffered channel is
 	// then used to determine the presence of pending tasks.
-	go svr.pipe(ctx)
-
 	// If no hot container is available, tasksout will fill up to its
-	// capacity, scale() will use this information to know whether it must
+	// capacity, pipe() will use this information to know whether it must
 	// start or not new hot containers.
-	go svr.scale(ctx)
+	go svr.pipe(ctx)
 	return svr
 }
 
 func (svr *htcntrsvr) pipe(ctx context.Context) {
-	for t := range svr.tasksin {
-		svr.tasksout <- t
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-	}
-}
-
-func (svr *htcntrsvr) scale(ctx context.Context) {
 	for {
-		timeout := time.After(htcntrScaleUpTimeout)
 		select {
-		case <-ctx.Done():
-			return
-
-		case <-timeout:
+		case t := <-svr.tasksin:
+			svr.tasksout <- t
 			if len(svr.tasksout) > 0 {
 				if err := svr.launch(ctx); err != nil {
 					logrus.WithError(err).Error("cannot start more hot containers")
 				}
 			}
+		case <-ctx.Done():
+			return
 		}
 	}
 }
